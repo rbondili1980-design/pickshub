@@ -527,15 +527,18 @@ async def run_grader() -> dict:
                         skipped_count += 1
                         continue
 
-                    # Write to DB
+                    # Write to DB — re-fetch and guard against race with admin manual grades.
+                    # If admin already set a non-pending result while we were running, skip.
                     row = (await db.execute(
                         select(Pick).where(Pick.id == pick_row.id)
                     )).scalars().first()
-                    if row:
+                    if row and row.result in (None, "pending"):
                         row.result = result
                         await db.commit()
                         graded_count += 1
                         logger.info(f"Graded pick {pick_row.id} ({pick_row.expert}): '{pick_row.pick}' → {result}")
+                    elif row:
+                        logger.info(f"Pick {pick_row.id} already manually graded as '{row.result}' — skipping auto-grade")
 
                 except Exception as e:
                     logger.error(f"Error grading pick {pick_row.id}: {e}")

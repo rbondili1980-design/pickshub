@@ -912,18 +912,18 @@ async def _save_pick(pick: dict):
     global _pick_batch_queue
     source = pick.get("source", "winible")
     async with SessionLocal() as db:
-        # Winible: dedup on case-insensitive expert + pick + odds within last 3 days.
-        # This handles: (1) expert name casing variants ("CBlez" vs "CBLez"),
-        # (2) re-scrapes that shift the date by 1 day (yesterday's cards appearing as today).
+        # Winible: dedup on case-insensitive expert + pick text within last 14 days.
+        # Intentionally omit `odds` — LLM extracts them inconsistently across runs,
+        # which would cause duplicates and overwrite manually-marked results.
+        # 14-day window covers multi-day cards and the old 3-day near-misses.
         # AN: dedup on expert+pick+posted_at (text is stable, date is reliable)
         if source == "winible":
-            cutoff = (datetime.now(_EST).date() - timedelta(days=3)).isoformat()
+            cutoff = (datetime.now(_EST).date() - timedelta(days=14)).isoformat()
             existing = (await db.execute(
                 select(Pick).where(
                     Pick.source    == source,
                     func.lower(Pick.expert) == (pick.get("expert") or "").lower(),
                     Pick.pick      == pick.get("pick", ""),
-                    Pick.odds      == pick.get("odds"),
                     Pick.posted_at >= cutoff,
                 )
             )).scalars().first()
