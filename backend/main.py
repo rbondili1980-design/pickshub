@@ -20,8 +20,11 @@ import os
 import secrets
 import sys
 import time
+import zoneinfo as _zi
 from datetime import datetime, date, timedelta
 from pathlib import Path
+
+_EST = _zi.ZoneInfo("America/New_York")
 
 from dotenv import load_dotenv
 
@@ -259,9 +262,7 @@ def _seconds_until_next_scrape_slot() -> float:
 
     Slots snap to fixed clock boundaries for predictability.
     """
-    import zoneinfo
-    est = zoneinfo.ZoneInfo("America/New_York")
-    now = datetime.now(est)
+    now = datetime.now(_EST)
     hour = now.hour  # 0–23 in Eastern time
 
     peak_interval_min = _AUTO_SCRAPE_INTERVAL // 60   # e.g. 10
@@ -574,8 +575,8 @@ async def get_stats_summary(_: str = Depends(require_auth)):
     if _stats_cache and (now - _stats_cache_at) < _STATS_TTL:
         return _stats_cache
 
-    # Use local time to match winible scraper's posted_at values (datetime.now())
-    today = datetime.now().date().isoformat()
+    # Use Eastern time to match scraper's posted_at values
+    today = datetime.now(_EST).date().isoformat()
     async with SessionLocal() as db:
         total         = await db.scalar(select(func.count(Pick.id)))
         today_count   = await db.scalar(select(func.count(Pick.id)).where(Pick.posted_at == today))
@@ -916,7 +917,7 @@ async def _save_pick(pick: dict):
         # (2) re-scrapes that shift the date by 1 day (yesterday's cards appearing as today).
         # AN: dedup on expert+pick+posted_at (text is stable, date is reliable)
         if source == "winible":
-            cutoff = (date.today() - timedelta(days=3)).isoformat()
+            cutoff = (datetime.now(_EST).date() - timedelta(days=3)).isoformat()
             existing = (await db.execute(
                 select(Pick).where(
                     Pick.source    == source,
