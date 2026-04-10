@@ -1,0 +1,22 @@
+# Core API
+fastapi==0.135.2
+uvicorn[standard]==0.42.0
+pydantic==2.12.5
+
+# Database
+sqlalchemy==2.0.48
+asyncpg==0.31.0
+aiosqlite          # kept for local dev fallback
+
+# Auth
+python-jose[cryptography]==3.5.0
+bcrypt==5.0.0
+
+# HTTP / utils
+httpx==0.28.1
+python-dotenv==1.2.2
+loguru==0.7.3
+
+# Scraper (Mac only — not installed on Fly.io)
+# playwright        -- install separately: playwright install chromium
+# groq              -- install separately

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Environment
+backend/.env
+backend/cookies/
+backend/logs/
+backend/picks.db
+backend/picks.db.bak
+backend/scrape_state.json
+
+# Node
+web/node_modules/
+web/dist/
+web/.vercel/
+
+# Fly.io
+.fly/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
