@@ -16,6 +16,7 @@ import json
 import httpx
 import os
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from playwright.async_api import async_playwright
 from .pick_utils import classify_pick_type, is_valid_pick
@@ -154,8 +155,10 @@ _MONTH_MAP = {
     'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12,
 }
 
+_EST = ZoneInfo("America/New_York")
+
 def _normalize_posted_at(raw: str | None) -> str:
-    today = date.today()
+    today = datetime.now(_EST).date()
 
     def _clamp(d: date) -> str:
         """Reject future dates (LLM confusing game date with post date).
@@ -267,8 +270,7 @@ def _parse_card_posted_at(raw_text: str) -> datetime | None:
     - Date-only for a PAST date → return that date at midnight (safe to skip)
     - Time-only ("10:28 am") → today at that time (yesterday if in future)
     """
-    from datetime import timezone as _tz
-    now = datetime.now(_tz.utc)
+    now = datetime.now(_EST)
     month_map = {
         'jan':1,'feb':2,'mar':3,'apr':4,'may':5,'jun':6,
         'jul':7,'aug':8,'sep':9,'oct':10,'nov':11,'dec':12,
@@ -296,7 +298,7 @@ def _parse_card_posted_at(raw_text: str) -> datetime | None:
             if mon:
                 yr = int(m.group(3)) if m.group(3) else now.year
                 try:
-                    card_date = datetime(yr, mon, int(m.group(2)), tzinfo=_tz.utc)
+                    card_date = datetime(yr, mon, int(m.group(2)), tzinfo=_EST)
                     # Date-only + today → time unknown → return None so card is never skipped
                     if card_date.date() >= now.date():
                         return None
@@ -636,7 +638,7 @@ async def run_scrape(on_pick=None, on_status=None, since=None) -> list[dict]:
             card_data: list[tuple[int, str, str]] = []  # (original_idx, expert, clean_text)
             last_expert: str | None = None
             skipped_old = 0
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            today_str = datetime.now(_EST).strftime("%Y-%m-%d")
 
             for idx, card in enumerate(cards):
                 try:
@@ -691,7 +693,7 @@ async def run_scrape(on_pick=None, on_status=None, since=None) -> list[dict]:
             _GAME_SENTINELS = frozenset({
                 "null", "none", "undefined", "unknown", "n/a", "na", "tbd", "tba", ""
             })
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            today_str = datetime.now(_EST).strftime("%Y-%m-%d")
             consecutive_rl_failures = 0
             _MAX_CONSECUTIVE_RL = 3
 

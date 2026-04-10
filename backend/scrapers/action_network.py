@@ -21,7 +21,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 logger = logging.getLogger("sharpslips.action_network")
 
 SOURCE       = "action_network"
-URL          = "https://www.actionnetwork.com/picks"
+URL          = "https://www.actionnetwork.com/picks?tab=following"
 LOGIN_URL    = "https://www.actionnetwork.com/login"
 COOKIES_FILE = Path(__file__).parent.parent / "cookies" / "action_network.json"
 
@@ -363,7 +363,9 @@ async def run_scrape(on_pick=None, on_status=None, since=None) -> list[dict]:
         # AN bakes the UA into the token — a mismatch causes silent session rejection.
         ua = _ua_from_cookies(saved) if saved else _DEFAULT_UA
         logger.info(f"AN using UA: {ua[:60]}...")
-        browser = await p.chromium.launch(headless=True)
+        # Use non-headless with off-screen position — AN blocks headless fingerprints
+        _LAUNCH_ARGS = ["--window-position=-2400,-2400", "--window-size=1280,900"]
+        browser = await p.chromium.launch(headless=False, args=_LAUNCH_ARGS)
         ctx = await browser.new_context(
             viewport={"width": 1280, "height": 900},
             user_agent=ua,
@@ -376,21 +378,18 @@ async def run_scrape(on_pick=None, on_status=None, since=None) -> list[dict]:
             await ctx.add_cookies(saved)
             page = await ctx.new_page()
             try:
-                await page.goto(URL, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(3000)
-                # Verify we're actually logged in (Following tab or user menu visible)
+                # Go directly to the Following tab — only works if logged in
+                await page.goto(URL + "?tab=following", wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(4000)
                 on_login_page = "login" in page.url
                 has_login_form = bool(await page.query_selector('input[type="email"]'))
-                # Check for sign of logged-in state: "Following" tab OR avatar/profile
-                logged_in_markers = await page.evaluate("""
-                    () => {
-                        const body = document.body.innerText;
-                        return body.includes('Following') || body.includes('My Account') ||
-                               body.includes('Sign Out') || body.includes('Log Out');
-                    }
-                """)
-                needs_login = on_login_page or has_login_form or not logged_in_markers
-                logger.info(f"AN cookie check: needs_login={needs_login}")
+                # If logged in, Following tab shows personalised picks (not generic public picks)
+                # We detect this by checking if the page redirected to login or still has login form
+                # Also check if "Discover Experts" (public) vs expert names (logged in following)
+                body_text = await page.evaluate("() => document.body.innerText")
+                is_public_only = "Discover Experts" in body_text and "Sign In" in body_text
+                needs_login = on_login_page or has_login_form or is_public_only
+                logger.info(f"AN cookie check: needs_login={needs_login} url={page.url[:60]}")
             except Exception as e:
                 logger.warning(f"AN cookie check failed: {e}")
                 needs_login = True
@@ -404,7 +403,7 @@ async def run_scrape(on_pick=None, on_status=None, since=None) -> list[dict]:
             if email and password:
                 log("AN: session expired — attempting headless login with stored credentials...")
                 try:
-                    lb = await p.chromium.launch(headless=True)
+                    lb = await p.chromium.launch(headless=False, args=_LAUNCH_ARGS)
                     lctx = await lb.new_context(
                         viewport={"width": 1280, "height": 900},
                         user_agent=_DEFAULT_UA,
@@ -451,7 +450,7 @@ async def run_scrape(on_pick=None, on_status=None, since=None) -> list[dict]:
                 return []
 
         # ── Step 3: Scrape the Following feed ────────────────────────────
-        browser = await p.chromium.launch(headless=True)
+        browser = await p.chromium.launch(headless=False, args=_LAUNCH_ARGS)
         fresh_cookies = _load_cookies()
         scrape_ua = _ua_from_cookies(fresh_cookies) if fresh_cookies else _DEFAULT_UA
         ctx = await browser.new_context(
