@@ -55,7 +55,7 @@ _NOISE_RE = re.compile(
 # ---------------------------------------------------------------------------
 # Groq text prompt — explains Winible DOM structure explicitly
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 5          # cards per Groq call  (4 calls for 20 cards vs 20 before)
+BATCH_SIZE = 3          # cards per Groq call — smaller batches prevent max_tokens truncation
 
 TEXT_PROMPT = """\
 Below are {n} sports betting pick cards from Winible.com, separated by [CARD N] markers.
@@ -331,13 +331,25 @@ def _parse_card_posted_at(raw_text: str) -> datetime | None:
 # ---------------------------------------------------------------------------
 def _parse_groq_response(raw: str) -> list[dict]:
     raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw.strip(), flags=re.M)
+    # Try clean parse first
     m = re.search(r'\[.*\]', raw, re.DOTALL)
     if m:
         try:
             return json.loads(m.group(0))
         except Exception:
             pass
-    return []
+    # Truncated JSON recovery: extract each complete {...} object individually
+    results = []
+    for obj_m in re.finditer(r'\{[^{}]*\}', raw, re.DOTALL):
+        try:
+            obj = json.loads(obj_m.group(0))
+            if isinstance(obj, dict) and obj.get("pick"):
+                results.append(obj)
+        except Exception:
+            pass
+    if results:
+        logger.warning(f"Groq response was truncated — recovered {len(results)} picks from partial JSON")
+    return results
 
 _MAX_RATE_LIMIT_WAIT = 90.0   # never block a scrape longer than this per card
 
@@ -364,7 +376,7 @@ async def _groq_text_batch(card_texts: list[str], api_key: str, retries: int = 2
                     json={
                         "model": GROQ_TEXT_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 1500,
+                        "max_tokens": 4096,
                         "temperature": 0,
                     },
                 )
@@ -489,24 +501,30 @@ async def _scroll_and_load(page, max_rounds: int = 20) -> int:
     await page.wait_for_timeout(500)
     return prev_count
 
-async def _expand_see_more(page, max_passes: int = 5):
-    """Click all 'see more' / 'show more' / 'load more' links until none remain."""
-    _EXPAND_TEXTS = ["see more", "show more", "load more", "read more", "view more"]
+async def _expand_see_more(page, max_passes: int = 8):
+    """Click all 'see more' / 'show more' / 'load more' links until none remain.
+    Uses JS-based case-insensitive scan so we catch 'See More', 'see more', etc.
+    """
     for _ in range(max_passes):
-        clicked = 0
-        for label in _EXPAND_TEXTS:
-            els = await page.query_selector_all(f'text="{label}"')
-            for el in els:
-                try:
-                    await el.scroll_into_view_if_needed()
-                    await el.click()
-                    clicked += 1
-                    await page.wait_for_timeout(300)
-                except Exception:
-                    pass
+        clicked = await page.evaluate("""() => {
+            const LABELS = ['see more','show more','load more','read more','view more'];
+            let count = 0;
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            const targets = [];
+            let node;
+            while ((node = walker.nextNode())) {
+                const t = node.textContent.trim().toLowerCase();
+                if (LABELS.includes(t)) {
+                    const el = node.parentElement;
+                    if (el && el.offsetParent !== null) targets.push(el);
+                }
+            }
+            targets.forEach(el => { try { el.click(); count++; } catch(e) {} });
+            return count;
+        }""")
         if clicked == 0:
             break
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(700)
 
 
 # ---------------------------------------------------------------------------
@@ -772,9 +790,9 @@ async def run_scrape(on_pick=None, on_status=None, since=None) -> list[dict]:
 
                 log(f"Batch {batch_start//BATCH_SIZE+1}: {len(all_extracted)} picks extracted")
 
-                # Pace: one 15s pause between batches (5 cards = ~3000 tok; 4 batches/min = 12K TPM — safe)
+                # Pace: 10s pause between batches (3 cards/batch, ~6 batches/min → safe under TPM limit)
                 if batch_start + BATCH_SIZE < len(card_data):
-                    await asyncio.sleep(15)
+                    await asyncio.sleep(10)
 
         except Exception as e:
             logger.error(f"Winible scrape page error: {e}", exc_info=True)
